@@ -1,0 +1,842 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>1-bit camera</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --cream: #ddd8cc;
+    --ink: #1a1008;
+    --bezel: #ddd8cc;
+    --bg: #111009;
+    --title-h: 20px;
+    --ui-font-size: 7.5px;
+    --mac-font: 'Press Start 2P', 'Monaco', monospace;
+  }
+
+  html, body {
+    width: 100%; height: 100%;
+    background: var(--bg);
+    display: flex;
+    align-items: stretch;
+    justify-content: stretch;
+    font-family: var(--mac-font);
+    overflow: hidden;
+    image-rendering: pixelated;
+  }
+
+  /* ── Mac window fills viewport, no rounding anywhere ── */
+  #mac-window {
+    position: relative;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    background: var(--bezel);
+    outline: 1px solid var(--ink);
+  }
+
+  /* ── Title bar: exact System 1 style ──
+     - 1px black border bottom
+     - horizontal lines texture wall-to-wall
+     - single close box left, nothing right
+     - title centered in Geneva (Press Start 2P here)
+  */
+  #title-bar {
+    height: var(--title-h);
+    background: var(--cream);
+    border-bottom: 1px solid var(--ink);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    user-select: none;
+    flex-shrink: 0;
+    /* Horizontal stripe texture across full bar */
+    background-image: repeating-linear-gradient(
+      to bottom,
+      var(--cream) 0px, var(--cream) 1px,
+      var(--ink)   1px, var(--ink)   2px
+    );
+  }
+
+  /* White knockout behind title text so stripes don't show through */
+  #title-text-wrap {
+    position: relative;
+    z-index: 2;
+    background: var(--cream);
+    padding: 1px 8px;
+    display: flex;
+    align-items: center;
+  }
+
+  #title-text {
+    font-family: var(--mac-font);
+    font-size: var(--ui-font-size);
+    color: var(--ink);
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+    line-height: 1;
+  }
+
+  /* Close box: single square, left side, System 1 style */
+  #close-box {
+    position: absolute;
+    left: 6px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 13px; height: 13px;
+    border: 1px solid var(--ink);
+    background: var(--cream);
+    z-index: 3;
+    /* Inner box — the real close box has a small inset square */
+    box-shadow: inset 2px 2px 0 var(--ink), inset -2px -2px 0 var(--ink);
+  }
+
+  /* Screen area — tight bezel padding like original Mac */
+  #screen-wrap {
+    padding: 6px 6px 0 6px;
+    background: var(--bezel);
+    flex: 1;
+    display: flex;
+    min-height: 0;
+  }
+
+  #screen-inner {
+    flex: 1;
+    background: var(--cream);
+    border: 1px solid var(--ink);
+    position: relative;
+    overflow: hidden;
+  }
+
+  canvas#display {
+    display: block;
+    width: 100%;
+    height: 100%;
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+  }
+
+  /* ── Camera permission overlay — lives INSIDE screen-inner ── */
+  #overlay {
+    position: absolute; inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: var(--cream);
+    z-index: 10;
+    gap: 0;
+    padding: 20px;
+  }
+  #overlay.hidden { display: none; }
+
+  /* Dialog box: System 1 — 1px border, offset pixel shadow, no radius */
+  .mac-dialog {
+    border: 1px solid var(--ink);
+    padding: 0;
+    background: var(--cream);
+    width: min(320px, 90%);
+    /* Pixel drop shadow — 2px offset, solid black */
+    box-shadow: 2px 2px 0 var(--ink);
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .mac-dialog-body {
+    padding: 20px 24px 16px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0;
+  }
+
+  .mac-dialog p {
+    font-family: var(--mac-font);
+    font-size: var(--ui-font-size);
+    line-height: 2.4;
+    color: var(--ink);
+    text-align: center;
+  }
+
+  /* Dialog divider line before button row */
+  .mac-dialog-footer {
+    border-top: 1px solid var(--ink);
+    padding: 10px 20px;
+    display: flex;
+    justify-content: center;
+  }
+
+  /* Button: System 1 — double border on default button, single otherwise */
+  .mac-btn {
+    font-family: var(--mac-font);
+    font-size: var(--ui-font-size);
+    background: var(--cream);
+    border: 1px solid var(--ink);
+    padding: 6px 20px;
+    cursor: pointer;
+    color: var(--ink);
+    letter-spacing: 0.05em;
+    line-height: 1;
+  }
+  .mac-btn:active { background: var(--ink); color: var(--cream); }
+  /* Default button gets double border — System 1 convention */
+  .mac-btn.primary {
+    outline: 3px solid var(--ink);
+    outline-offset: 2px;
+  }
+
+  /* ── Status / control bar ── */
+  #status-bar {
+    height: 36px;
+    background: var(--bezel);
+    border-top: 1px solid var(--ink);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 9px;
+    flex-shrink: 0;
+    gap: 9px;
+  }
+
+  #status-text {
+    font-family: var(--mac-font);
+    font-size: var(--ui-font-size);
+    color: var(--ink);
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+    min-width: 80px;
+    line-height: 1;
+  }
+
+  .ctrl-group {
+    display: flex;
+    gap: 3px;
+    align-items: center;
+  }
+
+  .px-btn, .dbg-btn {
+    font-family: var(--mac-font);
+    font-size: var(--ui-font-size);
+    border: 1px solid var(--ink);
+    background: var(--cream);
+    color: var(--ink);
+    padding: 5px 8px;
+    cursor: pointer;
+    letter-spacing: 0.03em;
+    line-height: 1;
+  }
+  .px-btn.active, .dbg-btn.active {
+    background: var(--ink);
+    color: var(--cream);
+  }
+
+  #fps-counter {
+    font-family: var(--mac-font);
+    font-size: var(--ui-font-size);
+    color: var(--ink);
+    letter-spacing: 0.03em;
+    min-width: 54px;
+    text-align: right;
+    line-height: 1;
+  }
+
+  /* ── Debug panel ── */
+  #debug-panel {
+    display: none;
+    background: var(--cream);
+    border-top: 1px solid var(--ink);
+    padding: 9px 12px;
+    flex-shrink: 0;
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 12px 24px;
+    align-items: center;
+  }
+  #debug-panel.open { display: flex; }
+
+  .dbg-row {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-family: var(--mac-font);
+    font-size: var(--ui-font-size);
+    color: var(--ink);
+    letter-spacing: 0.03em;
+    line-height: 1;
+  }
+  .dbg-row label { white-space: nowrap; }
+  .dbg-row input[type=range] {
+    -webkit-appearance: none;
+    width: 90px; height: 2px;
+    background: var(--ink);
+    cursor: pointer;
+  }
+  .dbg-row input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 12px; height: 12px;
+    background: var(--cream);
+    border: 1px solid var(--ink);
+    border-radius: 0;
+  }
+  .dbg-val {
+    min-width: 36px;
+    font-size: var(--ui-font-size);
+    color: var(--ink);
+  }
+
+  /* Resize grip — bottom right, pixel diagonal lines */
+  #resize-grip {
+    position: absolute; bottom: 0; right: 0;
+    width: 12px; height: 12px;
+    background: repeating-linear-gradient(
+      -45deg, transparent, transparent 1px,
+      var(--ink) 1px, var(--ink) 2px
+    );
+    opacity: 0.3;
+  }
+</style>
+</head>
+<body>
+
+<div id="mac-window">
+  <div id="title-bar">
+    <div id="close-box"></div>
+    <div id="title-text-wrap">
+      <span id="title-text">1-bit camera</span>
+    </div>
+  </div>
+
+  <div id="screen-wrap">
+    <div id="screen-inner">
+      <canvas id="display"></canvas>
+      <div id="overlay">
+        <div class="mac-dialog">
+          <div class="mac-dialog-body">
+            <p>This application requires<br>access to your camera.<br><br>All processing is on-device.<br>Nothing is transmitted.</p>
+          </div>
+          <div class="mac-dialog-footer">
+            <button class="mac-btn primary" id="start-btn">Allow Camera</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Debug panel (above status bar) -->
+  <div id="debug-panel">
+    <div class="dbg-row">
+      <label>MASK THRESH</label>
+      <input type="range" id="sl-threshold" min="0.1" max="0.9" step="0.01" value="0.35">
+      <span class="dbg-val" id="val-threshold">0.35</span>
+    </div>
+    <div class="dbg-row">
+      <label>BRIGHTNESS</label>
+      <input type="range" id="sl-brightness" min="-0.4" max="0.4" step="0.01" value="0.0">
+      <span class="dbg-val" id="val-brightness">0.00</span>
+    </div>
+    <div class="dbg-row">
+      <label>CONTRAST</label>
+      <input type="range" id="sl-contrast" min="0.5" max="2.5" step="0.05" value="1.2">
+      <span class="dbg-val" id="val-contrast">1.20</span>
+    </div>
+    <div class="dbg-row">
+      <label>EMA α</label>
+      <input type="range" id="sl-ema" min="0.05" max="1.0" step="0.05" value="0.35">
+      <span class="dbg-val" id="val-ema">0.35</span>
+    </div>
+    <div class="dbg-row">
+      <label>LUMA EMA α</label>
+      <input type="range" id="sl-lumaEma" min="0.05" max="1.0" step="0.05" value="0.25">
+      <span class="dbg-val" id="val-lumaEma">0.25</span>
+    </div>
+    <div class="dbg-row">
+      <label>QUANT LEVELS</label>
+      <input type="range" id="sl-quant" min="2" max="32" step="1" value="8">
+      <span class="dbg-val" id="val-quant">8</span>
+    </div>
+    <div class="dbg-row">
+      <label>DITHER SCALE</label>
+      <input type="range" id="sl-dither" min="0.3" max="2.0" step="0.05" value="1.0">
+      <span class="dbg-val" id="val-dither">1.00</span>
+    </div>
+  </div>
+
+  <div id="status-bar">
+    <span id="status-text">READY</span>
+    <div class="ctrl-group">
+      <button class="px-btn active" id="px-toggle">PX 1×</button>
+    </div>
+    <div class="ctrl-group">
+      <button class="px-btn active" id="dither-toggle">BAYER 8</button>
+    </div>
+    <div class="ctrl-group">
+      <button class="px-btn active" id="color-toggle">1-BIT MAC</button>
+    </div>
+    <div class="ctrl-group">
+      <button class="dbg-btn" id="debug-toggle">DEBUG</button>
+    </div>
+    <span id="fps-counter">-- fps</span>
+  </div>
+
+  <div id="resize-grip"></div>
+</div>
+
+<video id="video" autoplay playsinline muted style="display:none"></video>
+<canvas id="proc-canvas" style="display:none"></canvas>
+
+<script type="module">
+import { ImageSegmenter, FilesetResolver } from
+  'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs';
+
+
+let params = {
+  threshold:  0.35,   // mask confidence cutoff
+  brightness: 0.0,
+  contrast:   1.2,
+  ema:        0.35,   // mask EMA alpha
+  lumaEma:    0.25,   // luma temporal blend (lower = more smoothing)
+  quant:      8,      // posterize levels before dither (4–32)
+  dither:     1.0,
+};
+
+// ── State ──
+let segmenter = null;
+let running   = false;
+let pixelSize = 1;
+let maskBuffer = null;
+let lumaBuffer = null;   // temporal EMA on luminance, per proc pixel
+let lastFrameTime = 0;
+let frameCount = 0;
+let fpsTime = 0;
+
+// ── Dither matrices ──
+
+// Bayer 8×8 — dispersed ordered, classic digital
+const MAT_BAYER8 = new Float32Array([
+   0,32, 8,40, 2,34,10,42,
+  48,16,56,24,50,18,58,26,
+  12,44, 4,36,14,46, 6,38,
+  60,28,52,20,62,30,54,22,
+   3,35,11,43, 1,33, 9,41,
+  51,19,59,27,49,17,57,25,
+  15,47, 7,39,13,45, 5,37,
+  63,31,55,23,61,29,53,21,
+].map(v => (v + 0.5) / 64));
+
+// Clustered dot 8×8 — proper centered dot growth, well-distributed
+// Values arranged so dot nucleates at center of each 4×4 cell
+const MAT_CLUSTER = new Float32Array([
+   9,11,10, 8,12,14,13,15,
+   3, 0, 1, 5, 6, 4, 2, 7,
+   8,10,11, 9,13,15,14,12,
+   4, 2, 0, 6, 7, 5, 1, 3,
+  12,14,13,15, 9,11,10, 8,
+   6, 4, 2, 7, 3, 0, 1, 5,
+  13,15,14,12, 8,10,11, 9,
+   7, 5, 1, 3, 4, 2, 0, 6,
+].map(v => (v + 0.5) / 16));
+
+// Horizontal line screen — 1px horizontal bands, 4-row period
+const MAT_HLINE = (() => {
+  const m = new Float32Array(64);
+  for (let y = 0; y < 8; y++) {
+    for (let x = 0; x < 8; x++) {
+      // 4-row repeating period, jitter x slightly to break banding
+      const row = y & 3;
+      const jitter = (x & 1) * 0.08;
+      m[y * 8 + x] = (row + 0.5 + jitter) / 4;
+    }
+  }
+  return m;
+})();
+
+// Diagonal line screen — 45°, 4-pixel period
+const MAT_DIAG = (() => {
+  const m = new Float32Array(64);
+  for (let y = 0; y < 8; y++) {
+    for (let x = 0; x < 8; x++) {
+      m[y * 8 + x] = (((x + y) & 3) + 0.5) / 4;
+    }
+  }
+  return m;
+})();
+
+// Blue noise 64-entry LUT — perceptually uniform, filmic grain
+// Hand-crafted well-distributed sequence (not random — stable)
+const MAT_BLUENOISE = new Float32Array([
+  0.50,0.09,0.62,0.23,0.44,0.76,0.13,0.84,
+  0.31,0.87,0.38,0.95,0.06,0.57,0.40,0.68,
+  0.75,0.19,0.56,0.12,0.81,0.28,0.92,0.03,
+  0.42,0.64,0.04,0.70,0.35,0.15,0.53,0.79,
+  0.17,0.93,0.47,0.25,0.60,0.89,0.22,0.46,
+  0.58,0.08,0.83,0.51,0.02,0.72,0.36,0.96,
+  0.29,0.77,0.14,0.67,0.43,0.18,0.61,0.11,
+  0.86,0.33,0.90,0.07,0.98,0.54,0.26,0.73,
+]);
+
+// Void-and-cluster 8×8 — Ulichney 1993, perceptually optimal ordered dither
+// Precomputed rank matrix: well-separated dots, no visible clustering
+const MAT_VOIDCLUSTER = new Float32Array([
+   3,35,14,43, 6,38,19,27,
+  24,54,29,62,21,58,46,11,
+  16, 8,48,32,40,26,34,52,
+  44,37,20,57, 0,47,13,61,
+   1,28,42,10,30,55,23,36,
+  50,18,63,25,45,15,41, 7,
+  33,53, 5,39,17,31,59,22,
+  12,60,49, 2,56, 9,51,53,
+].map(v => (v + 0.5) / 64));
+
+const DITHER_MODES = [
+  { key: 'bayer8',      label: 'BAYER 8',  mat: MAT_BAYER8,      type: 'ordered' },
+  { key: 'cluster',     label: 'CLUSTER',  mat: MAT_CLUSTER,     type: 'ordered' },
+  { key: 'voidcluster', label: 'VOID+CLU', mat: MAT_VOIDCLUSTER, type: 'ordered' },
+  { key: 'hline',       label: 'H-LINE',   mat: MAT_HLINE,       type: 'ordered' },
+  { key: 'diag',        label: 'DIAG 45',  mat: MAT_DIAG,        type: 'ordered' },
+  { key: 'bluenoise',   label: 'BLUE NN',  mat: MAT_BLUENOISE,   type: 'ordered' },
+];
+
+let ditherIdx = 0;
+let activeMode = DITHER_MODES[0];
+
+function ditherThreshold(x, y) {
+  return activeMode.mat[((y & 7) << 3) | (x & 7)];
+}
+
+// ── Pixel size cycling toggle ──
+const PX_MODES = [
+  { size: 1, label: 'PX 1×' },
+  { size: 2, label: 'PX 2×' },
+  { size: 4, label: 'PX 4×' },
+];
+let pxIdx = 0;
+const pxToggleBtn = document.getElementById('px-toggle');
+pxToggleBtn.addEventListener('click', () => {
+  pxIdx = (pxIdx + 1) % PX_MODES.length;
+  pixelSize = PX_MODES[pxIdx].size;
+  pxToggleBtn.textContent = PX_MODES[pxIdx].label;
+  maskBuffer = null;
+  lumaBuffer = null;
+});
+
+// ── Dither mode cycling toggle ──
+const ditherToggleBtn = document.getElementById('dither-toggle');
+ditherToggleBtn.addEventListener('click', () => {
+  ditherIdx = (ditherIdx + 1) % DITHER_MODES.length;
+  activeMode = DITHER_MODES[ditherIdx];
+  ditherToggleBtn.textContent = activeMode.label;
+});
+
+// Colors
+const COLOR_MODES = [
+  {
+    label:    '1-BIT MAC',
+    cream:    [221, 216, 204],
+    bg:       [221, 216, 204],  // background = cream (filled display)
+    cssCream: '#ddd8cc',
+    cssInk:   '#1a1008',
+    cssBezel: '#ddd8cc',
+    cssBg:    '#111009',
+  },
+  {
+    label:    'PHOSPHOR',
+    cream:    [51, 204, 51],
+    bg:       [0, 0, 0],        // background = black (unlit phosphor)
+    cssCream: '#33cc33',
+    cssInk:   '#0a1a0a',
+    cssBezel: '#33cc33',
+    cssBg:    '#000800',
+  },
+];
+let colorIdx = 0;
+let CREAM = COLOR_MODES[0].cream;
+let BG    = COLOR_MODES[0].bg;
+const INK  = [26, 16, 8];
+
+function applyColorMode(mode) {
+  const r = document.documentElement;
+  r.style.setProperty('--cream',  mode.cssCream);
+  r.style.setProperty('--ink',    mode.cssInk);
+  r.style.setProperty('--bezel',  mode.cssBezel);
+  r.style.setProperty('--bg',     mode.cssBg);
+}
+
+const colorToggleBtn = document.getElementById('color-toggle');
+colorToggleBtn.addEventListener('click', () => {
+  colorIdx = (colorIdx + 1) % COLOR_MODES.length;
+  const mode = COLOR_MODES[colorIdx];
+  CREAM = mode.cream;
+  BG    = mode.bg;
+  colorToggleBtn.textContent = mode.label;
+  colorToggleBtn.classList.toggle('active', colorIdx === 0);
+  applyColorMode(mode);
+});
+
+// ── DOM ──
+const video      = document.getElementById('video');
+const procCanvas = document.getElementById('proc-canvas');
+const display    = document.getElementById('display');
+const overlay    = document.getElementById('overlay');
+const startBtn   = document.getElementById('start-btn');
+const statusText = document.getElementById('status-text');
+const fpsEl      = document.getElementById('fps-counter');
+const screenInner= document.getElementById('screen-inner');
+const debugPanel = document.getElementById('debug-panel');
+const debugToggle= document.getElementById('debug-toggle');
+
+// ── Debug sliders ──
+function wire(id, key, decimals) {
+  const sl  = document.getElementById('sl-' + id);
+  const val = document.getElementById('val-' + id);
+  sl.addEventListener('input', () => {
+    params[key] = parseFloat(sl.value);
+    val.textContent = params[key].toFixed(decimals);
+  });
+}
+wire('threshold', 'threshold', 2);
+wire('brightness','brightness',2);
+wire('contrast',  'contrast',  2);
+wire('ema',       'ema',       2);
+wire('lumaEma',   'lumaEma',   2);
+wire('quant',     'quant',     0);
+wire('dither',    'dither',    2);
+
+debugToggle.addEventListener('click', () => {
+  debugPanel.classList.toggle('open');
+  debugToggle.classList.toggle('active');
+});
+
+
+
+
+// ── Init segmenter ──
+async function initSegmenter() {
+  statusText.textContent = 'LOADING MODEL...';
+  const vision = await FilesetResolver.forVisionTasks(
+    'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm'
+  );
+  segmenter = await ImageSegmenter.createFromOptions(vision, {
+    baseOptions: {
+      modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_multiclass_256x256/float32/latest/selfie_multiclass_256x256.tflite',
+      delegate: 'GPU',
+    },
+    runningMode: 'VIDEO',
+    outputCategoryMask: false,
+    outputConfidenceMasks: true,
+  });
+  statusText.textContent = 'LIVE';
+}
+
+// ── Camera ──
+startBtn.addEventListener('click', async () => {
+  try {
+    statusText.textContent = 'REQUESTING CAMERA...';
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
+      audio: false,
+    });
+    video.srcObject = stream;
+    await video.play();
+    overlay.classList.add('hidden');
+    await initSegmenter();
+    running = true;
+    loop();
+  } catch(e) {
+    statusText.textContent = 'ERROR: ' + e.message;
+  }
+});
+
+// ── Render loop ──
+function loop() {
+  if (!running) return;
+  requestAnimationFrame(loop);
+  if (video.readyState < 2) return;
+
+  const now = performance.now();
+  if (now - lastFrameTime < 33) return; // ~30fps cap
+  lastFrameTime = now;
+
+  // FPS
+  frameCount++;
+  if (now - fpsTime >= 1000) {
+    fpsEl.textContent = frameCount + ' fps';
+    frameCount = 0;
+    fpsTime = now;
+  }
+
+  const dispW = screenInner.clientWidth;
+  const dispH = screenInner.clientHeight;
+  const gridW = Math.max(1, Math.floor(dispW / pixelSize));
+  const gridH = Math.max(1, Math.floor(dispH / pixelSize));
+
+  // Inference at ≤256px on the short axis, preserving aspect
+  const aspect = dispW / dispH;
+  let procW, procH;
+  if (aspect >= 1) {
+    procH = Math.min(gridH, 256);
+    procW = Math.min(gridW, Math.round(procH * aspect));
+  } else {
+    procW = Math.min(gridW, 256);
+    procH = Math.min(gridH, Math.round(procW / aspect));
+  }
+  procW = Math.max(1, procW);
+  procH = Math.max(1, procH);
+
+  if (procCanvas.width !== procW || procCanvas.height !== procH) {
+    procCanvas.width  = procW;
+    procCanvas.height = procH;
+    maskBuffer = null;
+    lumaBuffer = null;
+  }
+  if (display.width !== gridW || display.height !== gridH) {
+    display.width  = gridW;
+    display.height = gridH;
+  }
+
+  const pctx = procCanvas.getContext('2d', { willReadFrequently: true });
+  pctx.save();
+  pctx.scale(-1, 1);
+  pctx.drawImage(video, -procW, 0, procW, procH);
+  pctx.restore();
+
+  // Segmentation
+  // selfie_multiclass indices: 0=background, 1=hair, 2=body-skin, 3=face-skin, 4=clothes, 5=others
+  // Combine indices 1-5 into a single "person" mask by taking max confidence per pixel
+  let rawMask = null;
+  if (segmenter) {
+    try {
+      const result = segmenter.segmentForVideo(procCanvas, now);
+      const masks = result?.confidenceMasks;
+      if (masks && masks.length > 1) {
+        const len = masks[1].getAsFloat32Array().length;
+        rawMask = new Float32Array(len);
+        for (let ci = 1; ci < masks.length; ci++) {
+          const ch = masks[ci].getAsFloat32Array();
+          for (let i = 0; i < len; i++) {
+            if (ch[i] > rawMask[i]) rawMask[i] = ch[i];
+          }
+        }
+      }
+    } catch(_) {}
+  }
+
+  // EMA on mask
+  if (rawMask) {
+    const a = params.ema;
+    if (!maskBuffer || maskBuffer.length !== rawMask.length) {
+      maskBuffer = new Float32Array(rawMask);
+    } else {
+      for (let i = 0; i < maskBuffer.length; i++) {
+        maskBuffer[i] = maskBuffer[i] * (1 - a) + rawMask[i] * a;
+      }
+    }
+  }
+
+  renderFrame(pctx, procW, procH, gridW, gridH, maskBuffer);
+}
+
+function renderFrame(pctx, procW, procH, gridW, gridH, mask) {
+  const imgData = pctx.getImageData(0, 0, procW, procH);
+  const src = imgData.data;
+  const pixCount = gridW * gridH;  // luma buffer at DISPLAY resolution
+
+  // ── Luma EMA buffer at display resolution ──
+  // Sample from proc canvas (which is already the downsampled+mirrored video)
+  // but map grid coords → proc coords for the lookup
+  const la = params.lumaEma;
+  const sxScale = procW / gridW;
+  const syScale = procH / gridH;
+
+  if (!lumaBuffer || lumaBuffer.length !== pixCount) {
+    lumaBuffer = new Float32Array(pixCount);
+    for (let gy = 0; gy < gridH; gy++) {
+      for (let gx = 0; gx < gridW; gx++) {
+        const sx = Math.min(Math.floor(gx * sxScale), procW - 1);
+        const sy = Math.min(Math.floor(gy * syScale), procH - 1);
+        const s = (sy * procW + sx) * 4;
+        lumaBuffer[gy * gridW + gx] = (0.299 * src[s] + 0.587 * src[s+1] + 0.114 * src[s+2]) / 255;
+      }
+    }
+  } else {
+    for (let gy = 0; gy < gridH; gy++) {
+      for (let gx = 0; gx < gridW; gx++) {
+        const sx = Math.min(Math.floor(gx * sxScale), procW - 1);
+        const sy = Math.min(Math.floor(gy * syScale), procH - 1);
+        const s = (sy * procW + sx) * 4;
+        const raw = (0.299 * src[s] + 0.587 * src[s+1] + 0.114 * src[s+2]) / 255;
+        const i = gy * gridW + gx;
+        lumaBuffer[i] = lumaBuffer[i] * (1 - la) + raw * la;
+      }
+    }
+  }
+
+  const dctx = display.getContext('2d');
+  const out = dctx.createImageData(gridW, gridH);
+  const dst = out.data;
+
+  const mxScale = procW / gridW;
+  const myScale = procH / gridH;
+
+  const { threshold: maskThreshold, brightness, contrast, quant, dither: ditherScale } = params;
+  const qstep = 1.0 / quant;
+
+  // ── Build adjusted luma grid ──
+  const lumGrid = new Float32Array(gridW * gridH);
+  for (let gy = 0; gy < gridH; gy++) {
+    for (let gx = 0; gx < gridW; gx++) {
+      let lum = lumaBuffer[gy * gridW + gx];  // already at grid resolution
+      lum = (lum - 0.5) * contrast + 0.5 + brightness;
+      lum = Math.max(0, Math.min(1, lum));
+      lum = Math.round(lum / qstep) * qstep;
+      lumGrid[gy * gridW + gx] = lum;
+    }
+  }
+
+  // ── Person mask lookup ──
+  function isPerson(gx, gy) {
+    if (!mask) return false;
+    const mx = Math.min(Math.floor(gx * mxScale), procW - 1);
+    const my = Math.min(Math.floor(gy * myScale), procH - 1);
+    return mask[my * procW + mx] > maskThreshold;
+  }
+
+  // ── Write bit to output ──
+  function writeBit(gx, gy, bit) {
+    const di = (gy * gridW + gx) * 4;
+    const col = bit === 0 ? INK : CREAM;
+    dst[di]   = col[0];
+    dst[di+1] = col[1];
+    dst[di+2] = col[2];
+    dst[di+3] = 255;
+  }
+
+  function writeBg(gx, gy) {
+    const di = (gy * gridW + gx) * 4;
+    dst[di]   = BG[0];
+    dst[di+1] = BG[1];
+    dst[di+2] = BG[2];
+    dst[di+3] = 255;
+  }
+
+  // ── Ordered dither — matrix threshold per pixel ──
+  for (let gy = 0; gy < gridH; gy++) {
+    for (let gx = 0; gx < gridW; gx++) {
+      if (!isPerson(gx, gy)) { writeBg(gx, gy); continue; }
+      const lum = lumGrid[gy * gridW + gx];
+      const t = ditherThreshold(gx, gy) * ditherScale;
+      writeBit(gx, gy, lum < t ? 0 : 1);
+    }
+  }
+
+  dctx.putImageData(out, 0, 0);
+}
+</script>
+</body>
+</html>
